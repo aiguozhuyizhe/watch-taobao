@@ -1,0 +1,179 @@
+# todo 如果金额和码匹配错了, 存储过程应该返回错误提示, 最好在调用端打印出来
+
+import win32com.client
+import pythoncom
+import datetime
+import logging
+import traceback
+from adodbapi import connect
+from flask import Flask, request
+from waitress import serve
+from urllib import parse
+from gevent.pywsgi import  WSGIServer
+
+# 本服务的IP, 如果是阿里云,要用两个ip其中那个本地的IP, 而不是外网的IP
+local_server_IP = '103.215.48.196'   # 169生产服务器
+local_server_Port = 8099
+
+# 数据库连接
+otcd_database_server = "119.23.181.176,985"
+otcd_database = "OTCD"
+otcd_database_user = "sa"
+otcd_database_password = "(NoPainsNoGains2019)"
+
+app = Flask(__name__)
+
+# 校验接口, 用于跑之前校验订单的金额 手机号 订单编号 是不是正确, 避免手机号或金额搞错了
+@app.route('/check', methods=["GET", "POST"])
+def check():
+    OrderID = request.args.get('taobaoorderno')
+    #Amount = request.args.get('amount')
+    Amount = '500'
+    Shopid = request.args.get('shopid')
+    OrderPhone = request.args.get('orderphone')
+    ShopPhone = request.args.get('shopphone')
+    Time = request.args.get('ordertime')
+    
+    
+    Result = "OK"
+
+    if (OrderID is None) or (Amount is None):
+        Result = "缺少参数"
+    else:
+        try:
+            OrderTime = parse.unquote(Time)
+            print(OrderTime)
+            # 这两句必须加上去， 才不会出现什么ADO.Connection的错误
+            pythoncom.CoInitialize()
+            win32com.client.Dispatch('ADODB.Connection')
+            conn = connect('Provider=SQLOLEDB.1 ;Data Source=%s;Initial Catalog=%s;User ID=%s;Password=%s;' % (otcd_database_server, otcd_database, otcd_database_user, otcd_database_password))
+            cursor = conn.cursor()
+            try:
+                try:
+                    if len(OrderID) > 0:
+                        r = cursor.callproc('sp_TaoBaoDFOrderCheck', (OrderID, Amount, Shopid, ShopPhone, OrderPhone, OrderTime, 0, ""))
+                    conn.commit()
+                except Exception as e:
+                    Result = "执行存储过程出错了,回滚"
+                    conn.rollback()
+                    print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+                    print('str(Exception):\t %s' % str(Exception))
+                    print('str(e):\t\t %s' % str(e))
+                    print('repr(e):\t %s' % repr(e))
+                    print('traceback.print_exc():\n%s' % traceback.print_exc())
+                    print('traceback.format_exc():\n%s' % traceback.format_exc())
+            finally:
+                cursor.close()
+                conn.close()
+
+            print(r)
+
+        except Exception as e:
+            Result = "出错了,没有捕捉到的异常"
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+
+    return Result
+
+# 监控到已经付款(待核销)状态的订单的时候,调用该接口
+@app.route('/confirm', methods=["GET", "POST"])
+def confirm():
+    OrderID = request.args.get('taobaoorderno')
+    #Amount = request.args.get('amount')
+    Amount= '500'
+
+    Result = "OK"
+
+    if (OrderID is None) or (Amount is None):
+        Result = "缺少参数"
+    else:
+        try:
+            #这两句必须加上去， 才不会出现什么ADO.Connection的错误
+            pythoncom.CoInitialize()
+            win32com.client.Dispatch('ADODB.Connection')
+            conn = connect('Provider=SQLOLEDB.1 ;Data Source=%s;Initial Catalog=%s;User ID=%s;Password=%s;' % (otcd_database_server, otcd_database, otcd_database_user, otcd_database_password))
+            cursor = conn.cursor()
+            try:
+                try:
+                    if len(OrderID) > 0:
+                        print(OrderID)
+                        r = cursor.callproc('sp_TaoBaoDFOrderConfirmed', (OrderID, Amount, "", 0, ""))
+                    conn.commit()
+                except Exception as e:
+                    Result = "执行存储过程出错了,回滚"
+                    conn.rollback()
+                    print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+                    print('str(Exception):\t %s' % str(Exception))
+                    print('str(e):\t\t %s' % str(e))
+                    print('repr(e):\t %s' % repr(e))
+                    print('traceback.print_exc():\n%s' % traceback.print_exc())
+                    print('traceback.format_exc():\n%s' % traceback.format_exc())
+            finally:
+                cursor.close()
+                conn.close()
+
+            print(r)
+
+        except Exception as e:
+            Result = "出错了,没有捕捉到的异常"
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+
+    return Result
+
+
+# 店铺监控掉线了, 必须使该店铺对应的会员立即停止接单, 否则会手忙脚乱
+@app.route('/logout', methods=["GET", "POST"])
+def logout():
+    shopid = request.args.get('shopid')
+
+    Result = "OK"
+
+    if shopid is None:
+        Result = "缺少参数"
+    else:
+        try:
+            # 这两句必须加上去， 才不会出现什么ADO.Connection的错误
+            pythoncom.CoInitialize()
+            win32com.client.Dispatch('ADODB.Connection')
+            conn = connect('Provider=SQLOLEDB.1 ;Data Source=%s;Initial Catalog=%s;User ID=%s;Password=%s;' % (otcd_database_server, otcd_database, otcd_database_user, otcd_database_password))
+            cursor = conn.cursor()
+            try:
+                try:
+                    cursor.execute("UPDATE OTCD_USER SET FUSDTForSale=0, FOTCDForSale=0 WHERE FAppUserID='" + shopid + "'")
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    Result = "出错了"
+                    print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+                    print('str(Exception):\t %s' % str(Exception))
+                    print('str(e):\t\t %s' % str(e))
+                    print('repr(e):\t %s' % repr(e))
+                    print('traceback.print_exc():\n%s' % traceback.print_exc())
+                    print('traceback.format_exc():\n%s' % traceback.format_exc())
+            finally:
+                cursor.close()
+                conn.close()
+        except Exception as e:
+            Result = "出错了"
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+
+    print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    *******  掉线了 *******：' + shopid)
+    return Result
+
+if __name__ == '__main__':
+    #serve(app,host=local_server_IP, port=local_server_Port)
+    WSGIServer((local_server_IP,local_server_Port),app).serve_forever()
