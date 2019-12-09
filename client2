@@ -1,0 +1,290 @@
+
+# C:\Python\Python37-32\Scripts> .\pip.exe install selenium
+# C:\Python\Python37-32\Scripts> .\pip.exe install requests
+
+# 启动方式:  首先, 需要手工在命令行启动Chrome浏览器, 用下面的命令
+# C:\Program Files (x86)\Google\Chrome\Application> .\chrome.exe --remote-debugging-port=9222
+#  https://myseller.taobao.com/home.htm
+
+import traceback
+from selenium import webdriver
+import configparser
+import codecs
+from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import NoSuchElementException
+import time
+import requests
+import datetime
+
+def ReportLogout():
+    print("==========================================================================================!")
+    print("*******************************************************************************************")
+    print("*******************************************************************************************")
+    print("*******************************************************************************************")
+    print("*******************************************************************************************")
+    print(datetime.datetime.now().strftime("%b %d %Y %H:%M:%S") + "  注意! 淘宝店铺 " + TaobaoShopID + "   掉线了!")
+    print("*******************************************************************************************")
+    print("*******************************************************************************************")
+    print("*******************************************************************************************")
+    print("*******************************************************************************************")
+    print("===========================================================================================")
+
+    # 向主服务器发送报文, 提交掉线的信息, 让这个用户自动停止挂单, 这样就不会给用户再派单了
+    if len(LogoutURL) > 0:
+        url = LogoutURL + "?shopid=" + TaobaoShopID
+        try:
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' 向主服务器发送报文, 提交掉线的信息, 让这个用户自动停止挂单, 这样就不会给用户再派单了......')
+            
+            r = requests.get(url, timeout=(5, 10))  # 第一个timeout参数是连接时间，第二个Timeout参数是读取超时的时间
+        except Exception as e:
+            print('发现掉线了! 但是向 ' + LogoutURL + ' 发送汇报信息的时候出错! ： ==================================================')
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+
+if __name__ == '__main__':
+    cfg = "./config.ini"
+    cp = configparser.ConfigParser()
+    with codecs.open(cfg, 'r', encoding='utf-8') as f:
+        cp.read_file(f)
+    TaobaoShopID = cp.get('CONFIG', 'TaobaoShopID')
+    LogoutURL = cp.get('CONFIG', 'LogoutURL')
+    ConfirmURL = cp.get('CONFIG', 'ConfirmURL')
+    
+    GetCodeURL = 'http://103.215.48.196:8022/getnewcode'
+    VerifyURL = 'http://103.215.48.196:8022/updatestatus'
+    LoginURL = 'http://103.215.48.196:8022/login'
+
+    try:
+        r = requests.get(LoginURL, timeout=(5, 10))   # 第一个timeout参数是连接时间，第二个Timeout参数是读取超时的时间
+    except Exception as e:
+        exit()
+
+    # 这是通过debug端口,控制一个已经打开的浏览器的手段
+    options = webdriver.ChromeOptions()
+    options.debugger_address = "127.0.0.1:9222"
+    browser = webdriver.Chrome(options=options)
+
+    url1 = 'https://trade.taobao.com/trade/itemlist/list_sold_items.htm?action=itemlist/SoldQueryAction&event_submit_do_query=1&auctionStatus=SEND&tabCode=haveSendGoods'
+    # url2是个没有什么用的网址,只是为了随便访问下,防止封号的
+    url2 = 'https://myseller.taobao.com/home.htm'
+    browser.get(url2)
+    time.sleep(60)
+
+    # 千牛后台
+    SuccedList = []   #所有成功的订单编号放这里, 用来去重复的, 之前传给接口的订单编号,就不再传了
+    browser.get(url1)
+    time.sleep(20)
+    browser.get(url2)   #这是为了避免封爬虫访问的一个随便的页面, 避免被服务器判断为一直Refresh同一个页面的DDOS
+
+    while 1:
+        try:
+            # 自动提交流程 ==============================================================================================================================
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            time.sleep(20)
+            browser.get(url1)
+            time.sleep(10)
+
+            # 如果页面标题不是 已卖出的宝贝, 就认为是被踢掉线了
+            if not u"已卖出的宝贝" in browser.title:
+                ReportLogout()
+                break  # 掉线了就不要再循环了
+            else:
+                # 获取一页中的需要核销和已经核销的订单编号和状态
+                for i in range(2, 12):  # 2是因为前面两个不是订单的HTML结构
+                    try:
+                        OrderStatus = browser.find_element_by_xpath('//*[@id="sold_container"]/div/div[5]/div[{}]/table[2]/tbody/tr/td[8]'.format(i))
+                        OrderNo = browser.find_element_by_xpath('//*[@id="sold_container"]/div/div[5]/div[{}]/table[1]/tbody/tr/td[1]/label/span[3]'.format(i))
+                        Amount = browser.find_element_by_xpath('//*[@id="sold_container"]/div/div[5]/div[{}]/table[2]/tbody/tr/td[2]/div/p'.format(i))
+
+                        # 数据接结构, 这个就是存在SuccedList里面的元素
+                        model_list1 = {
+                        "单号":OrderNo.text,
+                        "状态":OrderStatus.text,
+                        }
+
+                        if model_list1 in SuccedList:
+                            pass
+                        else:
+                            # 调用订单确认到账的远程服务, 为了确保接收到调用, 如果出现网络故障, 这里重试15次
+                            n = 0
+                            while n < 16:
+                                try:
+                                    n += 1
+                                    print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' 调用自动确认接口远程......')
+                                    
+                                    url = ConfirmURL + "?taobaoorderno=" + OrderNo.text + "&amount=" + Amount.text + "&shopid=" + TaobaoShopID
+                                    r = requests.get(url, timeout=(5, 10))   # 第一个timeout参数是连接时间，第二个Timeout参数是读取超时的时间
+                                    if r.text == "OK" and OrderStatus.text == "核销":
+                                        SuccedList.append(model_list1)
+                                        print("现在时间：" + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + "   单号:" + OrderNo.text + "    确认完毕OK")
+                                        break
+                                    else:
+                                        print("确认接口返回错误信息: " + r.text)
+                                except Exception as e:
+                                    print('调用自动确认接口时候发生错误： ==================================================')
+                                    print('str(Exception):\t %s' % str(Exception))
+                                    print('str(e):\t\t %s' % str(e))
+                                    print('repr(e):\t %s' % repr(e))
+                                    print('traceback.print_exc():\n%s' % traceback.print_exc())
+                                    print('traceback.format_exc():\n%s' % traceback.format_exc())
+                                time.sleep(2)  # 调用接口也要有时间间隔，否则被接口服务器拉黑就麻烦了
+
+                    except NoSuchElementException as e:
+                        pass
+
+                # 下一页
+                Second = browser.find_element_by_xpath('//*[@id="sold_container"]/div/div[5]/div[1]/div[3]/div/button[2]')
+                if Second != None:
+                    Second.click()
+                    time.sleep(10)
+                    if not u"已卖出的宝贝" in browser.title:
+                        # 这些代码是从上面的第一页复制来的
+                        for i in range(2, 12):  # 2是因为前面两个不是订单的HTML结构
+                            try:
+                                OrderStatus = browser.find_element_by_xpath(
+                                    '//*[@id="sold_container"]/div/div[5]/div[{}]/table[2]/tbody/tr/td[8]'.format(i))
+                                OrderNo = browser.find_element_by_xpath(
+                                    '//*[@id="sold_container"]/div/div[5]/div[{}]/table[1]/tbody/tr/td[1]/label/span[3]'.format(i))
+                                Amount = browser.find_element_by_xpath(
+                                    '//*[@id="sold_container"]/div/div[5]/div[{}]/table[2]/tbody/tr/td[2]/div/p'.format(i))
+
+                                # 数据接结构, 这个就是存在SuccedList里面的元素
+                                model_list1 = {
+                                    "单号": OrderNo.text,
+                                    "状态": OrderStatus.text,
+                                }
+
+                                if model_list1 in SuccedList:
+                                    pass
+                                else:
+                                    # 调用订单确认到账的远程服务, 为了确保接收到调用, 如果出现网络故障, 这里重试15次
+                                    n = 0
+                                    while n < 16:
+                                        try:
+                                            n += 1
+                                            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' 调用自动确认接口远程......')
+                                            url = ConfirmURL + "?taobaoorderno=" + OrderNo.text + "&amount=" + Amount.text + "&shopid=" + TaobaoShopID
+                                            r = requests.get(url, timeout=(5, 10))  # 第一个timeout参数是连接时间，第二个Timeout参数是读取超时的时间
+                                            if r.text == "OK" and OrderStatus.text == "核销":
+                                                SuccedList.append(model_list1)
+                                                print("现在时间：" + datetime.datetime.now().strftime(
+                                                    '%Y-%m-%d %H:%M:%S') + "   单号:" + OrderNo.text + "    确认完毕OK")
+                                                break
+                                            else:
+                                                print("确认接口返回错误信息: " + r.text)
+                                        except Exception as e:
+                                            print('调用自动确认接口时候发生错误： ==================================================')
+                                            print('str(Exception):\t %s' % str(Exception))
+                                            print('str(e):\t\t %s' % str(e))
+                                            print('repr(e):\t %s' % repr(e))
+                                            print('traceback.print_exc():\n%s' % traceback.print_exc())
+                                            print('traceback.format_exc():\n%s' % traceback.format_exc())
+                                        time.sleep(2)  # 调用接口也要有时间间隔，否则被接口服务器拉黑就麻烦了
+
+                            except NoSuchElementException as e:
+                                pass
+
+        #            time.sleep(20)
+            # time.sleep(5)
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' 调用网址URL2......')
+            browser.get(url2)   # 这是为了避免封爬虫访问的一个随便的页面, 避免被服务器判断为一直Refresh同一个页面的DDOS
+            time.sleep(10)
+ 
+            # 核销流程 ==============================================================================================================================
+            # 注意事项, 核销只核销20分钟以前的, 核销太快了, 容易把自动确认没有做的给核销了,导致掉单
+            # 调用服务器端接口， 获取新的核销单号
+
+            if len(GetCodeURL) > 0:
+                ConfirmCode = ''
+                url = GetCodeURL + "?shopid=" + TaobaoShopID   # 从服务器数据库读取一个新的确认码
+                try:
+                    time.sleep(5)
+                    print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' 调用服务器端接口， 获取新的核销单号......')
+                    r = requests.get(url, timeout=(5, 10))  # 第一个timeout参数是连接时间，第二个Timeout参数是读取超时的时间
+                except Exception as e:
+                    print('调用获取新核销单号接口时候发生错误： ==================================================')
+                    print('str(Exception):\t %s' % str(Exception))
+                    print('str(e):\t\t %s' % str(e))
+                    print('repr(e):\t %s' % repr(e))
+                    print('traceback.print_exc():\n%s' % traceback.print_exc())
+                    print('traceback.format_exc():\n%s' % traceback.format_exc())
+                time.sleep(2)
+                # 如果发现有新的单子需要核销
+                if len(r.text) > 0:
+                    Result = "2"   # 2表示核销失败
+                    print('Found New Code Need to Be Verify')
+                    print(r.text)
+                    VerifyCodeID = r.text.split(',' ,1)[0]
+                    ConfirmCode = r.text.split(',' ,1)[1]
+
+                    time.sleep(5)
+                    print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' 进入核销页面......')
+                    browser.get('https://ma.taobao.com/consume/code.htm')
+
+                    if not u"核销流程_输入电子凭证" in browser.title:
+                        ReportLogout()
+                        break # 掉线了就不要再循环了
+                    else:
+                        elem = browser.find_element_by_name("_fm.cod._0.co")
+                        elem.send_keys(u"3")
+                        time.sleep(1)
+                        elem.send_keys(u"2")
+                        time.sleep(1)
+                        elem.send_keys(u"1")
+                        time.sleep(1)
+                        elem.send_keys(Keys.CONTROL, 'a')
+                        time.sleep(1)
+                        elem.send_keys(Keys.BACK_SPACE)
+                        time.sleep(1)
+                        elem.send_keys(ConfirmCode)
+                        time.sleep(1)
+                        elem.send_keys(Keys.RETURN)
+
+                        time.sleep(10)
+
+                        if u"核销流程_确认消费" in browser.title:
+                            elem = browser.find_element_by_name("consumeNum")
+                            elem.send_keys(u"3")
+                            time.sleep(1)
+                            elem.send_keys(u"1")
+                            time.sleep(1)
+                            elem.send_keys(Keys.BACK_SPACE)
+                            time.sleep(1)
+                            elem.send_keys(u"1")
+                            time.sleep(1)
+                            elem.send_keys(Keys.BACK_SPACE)
+                            time.sleep(1)
+                            elem.send_keys(Keys.CONTROL, 'a')
+                            time.sleep(1)
+                            elem.send_keys(Keys.BACK_SPACE)
+                            time.sleep(1)
+                            elem.send_keys(u"1")
+                            time.sleep(1)
+                            elem.send_keys(Keys.RETURN)
+                            Result = "1"  # 核销成功
+
+                        # 如果顺利完成，调用完成接口
+                        url = VerifyURL + "?id=" + VerifyCodeID + "&status=" + Result + "&shopid=" + TaobaoShopID
+                        try:
+                            time.sleep(5)
+                            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' 进入已发货页面......')
+                            r = requests.get(url, timeout=(5, 10))   # 第一个timeout参数是连接时间，第二个Timeout参数是读取超时的时间
+                        except Exception as e:
+                            print('调用完成核销接口时候发生错误： ==================================================')
+                            print('str(Exception):\t %s' % str(Exception))
+                            print('str(e):\t\t %s' % str(e))
+                            print('repr(e):\t %s' % repr(e))
+                            print('traceback.print_exc():\n%s' % traceback.print_exc())
+                            print('traceback.format_exc():\n%s' % traceback.format_exc())
+                        time.sleep(2)
+        except Exception as e:
+            print('======================  发生不知道的错误： ==================================================')
+            time.sleep(30)
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
