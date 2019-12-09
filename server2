@@ -1,0 +1,179 @@
+# todo 如果金额和码匹配错了, 存储过程应该返回错误提示, 最好在调用端打印出来
+
+import win32com.client
+import pythoncom
+import datetime
+import logging
+import traceback
+from adodbapi import connect
+from flask import Flask, request
+from waitress import serve
+from gevent.pywsgi import  WSGIServer
+
+# 本服务的IP, 如果是阿里云,要用两个ip其中那个本地的IP, 而不是外网的IP
+local_server_IP = '103.215.48.196'  #这个地方要写169内网地址   169生产服务器
+local_server_Port = 8022
+
+# 数据库连接
+api_database_server = "119.23.181.176,985"
+api_database = "API"
+api_database_user = "sa"
+api_database_password = "(NoPainsNoGains2019)"
+
+app = Flask(__name__)
+
+# 表结构
+# CREATE TABLE [dbo].[OTCD_APIDFVerification](
+# 	[ID] [int] IDENTITY(1,1) NOT NULL,
+# 	[FShopID] [nvarchar](36) NULL,
+# 	[FVerifyCode] [nvarchar](30) NULL,
+# 	[FStatus] [int] NULL,
+#   [FCreateTime] [DATETIME] DEFAULT getdate()
+# ) ON [PRIMARY]
+
+# 上传码的接口
+@app.route('/login', methods=["GET", "POST"])
+def login():
+    return "OK"
+
+
+# 上传码的接口
+@app.route('/uploadnewcode', methods=["GET", "POST"])
+def uploadneworderno():
+    VerifyCode = request.args.get('verifycode')
+    ShopID = request.args.get('shopid')
+
+    print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' 新的确认码  ' + VerifyCode)
+
+    Result = "OK"
+
+    if (VerifyCode is None) or (ShopID is None):
+        Result = "缺少参数"
+    else:
+        try:
+            # 这两句必须加上去， 才不会出现什么ADO.Connection的错误
+            pythoncom.CoInitialize()
+            win32com.client.Dispatch('ADODB.Connection')
+            conn = connect('Provider=SQLOLEDB.1 ;Data Source=%s;Initial Catalog=%s;User ID=%s;Password=%s;' % (api_database_server, api_database, api_database_user, api_database_password))
+            cursor = conn.cursor()
+            try:
+                #r = cursor.execute("SELECT TOP 1 FVerifyCode FROM OTCD_APIDFVerification WHERE FCreateTime >= dateadd(MINUTE,-240,GETDATE())  AND FShopID='" + ShopID + "' AND FVerifyCode='" + VerifyCode +"'")
+#                print("SELECT TOP 1 FVerifyCode FROM OTCD_APIDFVerification WHERE FCreateTime <= dateadd(MINUTE,-240,GETDATE())  AND FShopID='" + ShopID + "' AND FVerifyCode='" + VerifyCode +"'")
+                #row = cursor.fetchone()
+                #print(row)
+                #if row == None:
+                    try:
+                        cursor.execute("INSERT INTO OTCD_APIDFVerification (FShopID, FVerifyCode, FStatus) VALUES (" + "'" + ShopID + "','" + VerifyCode + "',0) ")
+                        conn.commit()
+                    except Exception as e:
+                        conn.rollback()
+                        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+                        print('str(Exception):\t %s' % str(Exception))
+                        print('str(e):\t\t %s' % str(e))
+                        print('repr(e):\t %s' % repr(e))
+                        print('traceback.print_exc():\n%s' % traceback.print_exc())
+                        print('traceback.format_exc():\n%s' % traceback.format_exc())
+                        Result = "上传失败"
+            finally:
+                cursor.close()
+                conn.close()
+        except Exception as e:
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+            Result = "上传失败"
+
+    return Result
+
+
+# 每次从服务器上获取一个新核销码, 这个核销码要是1小时之前的, 避免太快核销了
+@app.route('/getnewcode', methods=["GET", "POST"])
+def getnewcode():
+    NewCode = ''
+    ShopID = request.args.get('shopid')
+
+    if ShopID is None:
+        return ''
+    else:
+        try:
+            # 这两句必须加上去， 才不会出现什么ADO.Connection的错误
+            pythoncom.CoInitialize()
+            win32com.client.Dispatch('ADODB.Connection')
+            conn = connect('Provider=SQLOLEDB.1 ;Data Source=%s;Initial Catalog=%s;User ID=%s;Password=%s;' % (api_database_server, api_database, api_database_user, api_database_password))
+            cursor = conn.cursor()
+            try:
+                r = cursor.execute("SELECT TOP 1 ID, FVerifyCode FROM OTCD_APIDFVerification WHERE FCreateTime <=  dateadd(MINUTE,-10,GETDATE()) AND FStatus=0 AND FShopID='" + ShopID + "'")
+                row = cursor.fetchone()
+                if row:
+                    NewCode = str(row[0]) + ',' + row[1]
+            finally:
+                cursor.close()
+                conn.close()
+        except Exception as e:
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+
+        if len(NewCode) > 0:
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    抽取新的核销码：' + NewCode)
+        else:
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    尚未收到新的核销码')
+
+        return NewCode
+
+
+# 核销完一笔, 更新状态
+@app.route('/updatestatus', methods=["GET", "POST"])
+def updatestatus():
+    VerifyCodeID = request.args.get('id')
+    Status = request.args.get('status')
+
+    Result = "OK"
+
+    if (VerifyCodeID is None) or (Status is None):
+        Result = "缺少参数"
+    else:
+        try:
+            # 这两句必须加上去， 才不会出现什么ADO.Connection的错误
+            pythoncom.CoInitialize()
+            win32com.client.Dispatch('ADODB.Connection')
+            conn = connect('Provider=SQLOLEDB.1 ;Data Source=%s;Initial Catalog=%s;User ID=%s;Password=%s;' % (api_database_server, api_database, api_database_user, api_database_password))
+            cursor = conn.cursor()
+            try:
+                try:
+                    cursor.execute("UPDATE OTCD_APIDFVerification SET FStatus=" + Status + " WHERE ID=" + VerifyCodeID)
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    Result = "出错了"
+                    print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+                    print('str(Exception):\t %s' % str(Exception))
+                    print('str(e):\t\t %s' % str(e))
+                    print('repr(e):\t %s' % repr(e))
+                    print('traceback.print_exc():\n%s' % traceback.print_exc())
+                    print('traceback.format_exc():\n%s' % traceback.format_exc())
+            finally:
+                cursor.close()
+                conn.close()
+        except Exception as e:
+            Result = "出错了"
+            print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '    !!!!!!!!!!!!!!!!!!!!!!!出错了! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+
+    print('完成一笔核销：' + VerifyCodeID)
+    return Result
+
+if __name__ == '__main__':
+    
+    #serve(app,host=local_server_IP, port=local_server_Port)
+    WSGIServer((local_server_IP,local_server_Port),app).serve_forever()
