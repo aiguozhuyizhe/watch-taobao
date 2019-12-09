@@ -1,0 +1,120 @@
+from selenium import webdriver
+import random
+import time
+import traceback
+import requests
+import configparser
+import codecs
+from urllib import parse
+import datetime
+
+# 这是通过debug端口,控制一个已经打开的浏览器的手段
+options = webdriver.ChromeOptions()
+options.debugger_address = "127.0.0.1:9222"
+browser = webdriver.Chrome(options=options)
+
+
+
+def GetOrderList():
+    # 获取到单号的存储地址
+    Order_List = []
+
+    # 获取代付款页第一页的订单号
+    for i in range(2, 17):
+    
+        try:
+            # 获取单号
+            time.sleep(3)
+            danhao = browser.find_element_by_xpath('//*[@id="sold_container"]/div/div[5]/div[{}]/table[1]/tbody/tr/td[1]/label/span[3]'.format(i))
+        except Exception as e:
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+
+        if danhao.text not in Order_List:
+            Order_List.append(danhao.text)
+    print("ssss")
+    # 做下一页操作，如果有下一页就一直下一页操作
+    while (len(Order_List)%15 == 0) and (len(Order_List) > 0):
+        count = len(Order_List)
+        try:
+            Next_Page = browser.find_element_by_xpath('//*[@id="sold_container"]/div/div[5]/div[1]/div[3]/div/button[2]')
+            print("ooooo")
+            Next_Page.click()
+            time.sleep(6)
+        except Exception as e:
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+        print("dddd")
+        # 获取代付款页下一页的订单号
+        for i in range(2,17):
+            try:
+                danhao = browser.find_element_by_xpath('//*[@id="sold_container"]/div/div[5]/div[{}]/table[1]/tbody/tr/td[1]/label/span[3]'.format(i))
+            except Exception as e:
+                print('str(Exception):\t %s' % str(Exception))
+                print('str(e):\t\t %s' % str(e))
+                print('repr(e):\t %s' % repr(e))
+                print('traceback.print_exc():\n%s' % traceback.print_exc())
+                print('traceback.format_exc():\n%s' % traceback.format_exc())
+
+            if danhao.text not in Order_List:
+                Order_List.append(danhao.text)
+        if count == len(Order_List):
+            break
+    return Order_List
+
+
+if __name__ == '__main__':
+     # 从配置文件读取核销用的手机号码
+    start = datetime.datetime.now()
+    print(start)
+    cfg = "./config.ini"
+    cp = configparser.ConfigParser()
+    with codecs.open(cfg, 'r', encoding='utf-8') as f:
+        cp.read_file(f)
+    TaobaoShopID = cp.get('CONFIG', 'TaobaoShopID')
+    ShopPhone = cp.get('CONFIG', 'ShopPhone')
+    CheckURL = cp.get('CONFIG', 'CheckURL')
+    print(CheckURL)
+    
+    spm = cp.get('CONFIG', 'spm')
+
+    # 先把所有订单单号读取到一个数组里面来
+    url = "https://trade.taobao.com/trade/itemlist/list_sold_items.htm?action=itemlist/SoldQueryAction&event_submit_do_query=1&auctionStatus=NOT_PAID&tabCode=waitBuyerPay"
+    browser.get(url)
+    time.sleep(5)
+    Order_List = GetOrderList()
+
+    # 把订单单号拼凑到网址里面, 然后就可以一个一个的读取页面
+    for OrderID in Order_List:
+        time.sleep(5)
+        href = "https://trade.taobao.com/trade/detail/e_ticket_trade_item_detail.htm?spm={0}&bizOrderId={1}".format(spm, OrderID)
+        browser.get(href)
+        time.sleep(3)
+        # 页面上爬下来的金额
+        strAmount = browser.find_element_by_xpath('//*[@id="J_TabView"]/div/div/div/table/tbody[2]/tr[3]/td[8]')
+        OrderAmount = str(int(float((strAmount.text))))
+        OrderPhone = browser.find_element_by_xpath('//*[@id="J_TabView"]/div/div/div/div/dl[1]/dd')
+        Time = browser.find_element_by_xpath('//*[@id="J_TabView"]/div/div/div/table/tbody[3]/tr[4]/td/span[2]')
+
+        # 调用服务器端接口,汇报爬来的校对数据
+        
+        OrderTime = parse.quote(Time.text)
+        print(OrderTime)
+        url = CheckURL + "?taobaoorderno=" + OrderID + "&ordertime=" + OrderTime + "&amount=" + OrderAmount + "&shopid=" + TaobaoShopID + "&orderphone=" + OrderPhone.text + "&shopphone=" + ShopPhone
+        try:
+            r = requests.get(url, timeout=(5, 10))  # 第一个timeout参数是连接时间，第二个Timeout参数是读取超时的时间
+        except Exception as e:
+            print('调用获取新核销单号接口时候发生错误： ==================================================')
+            print('str(Exception):\t %s' % str(Exception))
+            print('str(e):\t\t %s' % str(e))
+            print('repr(e):\t %s' % repr(e))
+            print('traceback.print_exc():\n%s' % traceback.print_exc())
+            print('traceback.format_exc():\n%s' % traceback.format_exc())
+    end = datetime.datetime.now()
+    print(end)
