@@ -11,14 +11,14 @@ from waitress import serve
 from gevent.pywsgi import  WSGIServer
 
 # 本服务的IP, 如果是阿里云,要用两个ip其中那个本地的IP, 而不是外网的IP
-local_server_IP = '103.215.48.196'  #这个地方要写169内网地址   169生产服务器
+local_server_IP = '03.25.48.96'  #这个地方要写169内网地址   169生产服务器
 local_server_Port = 8022
 
 # 数据库连接
-api_database_server = "119.23.181.176,985"
+api_database_server = "19.23.81.76,985"
 api_database = "API"
 api_database_user = "sa"
-api_database_password = "(NoPainsNoGains2019)"
+api_database_password = ""
 
 app = Flask(__name__)
 
